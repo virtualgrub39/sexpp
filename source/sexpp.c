@@ -394,7 +394,7 @@ static struct token *
 expect (struct token **head, int kind, sexpr_err_t *out_err)
 {
     struct token *next_tok = next (head, out_err);
-    if (!next_tok) return NULL; /* Safety check for NULL on EOF */
+    if (!next_tok) return NULL;
 
     if (next_tok->kind != kind)
     {

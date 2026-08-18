@@ -1,26 +1,37 @@
-SOURCE += source/sexpp.c
-LIBDIR = lib
-BUILD = build
+LIBDIR 	?= lib
+BUILD 	?= build
+CC		?= cc
+AR		?= ar
 
-CFLAGS += -Wall -Wextra
+CFLAGS += -Wall -Wextra -pedantic-errors
+CFLAGS += -ansi
 CFLAGS += -Iinclude
-CFLAGS += -ansi -pedantic-errors
-CFLAGS += -ggdb
-# CFLAGS += -O2
+CFLAGS += -fPIC
 
-all: $(LIBDIR)/sexpp.so $(LIBDIR)/sexpp.a $(BUILD)/test
+# CFLAGS += -ggdb
+CFLAGS += -O2
+
+STATIC_LIB = $(LIBDIR)/libsexpp.a
+SHARED_LIB = $(LIBDIR)/libsexpp.so
+
+.PHONY: all clean
+
+all: $(SHARED_LIB) $(STATIC_LIB) $(BUILD)/test
 
 $(LIBDIR) $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/sexpp.o: $(SOURCE) | $(BUILD)
+$(BUILD)/sexpp.o: source/sexpp.c | $(BUILD) include/sexpp.h
 	$(CC) -c -o $@ $(CFLAGS) $^
 
-$(LIBDIR)/sexpp.so: $(BUILD)/sexpp.o | $(LIBDIR)
-	$(CC) -shared -fPIC -o $@ $(CFLAGS) $^ $(LDFLAGS)
+$(SHARED_LIB): $(BUILD)/sexpp.o | $(LIBDIR)
+	$(CC) -shared -o $@ $(CFLAGS) $^ $(LDFLAGS)
 
-$(LIBDIR)/sexpp.a: $(BUILD)/sexpp.o | $(LIBDIR)
+$(STATIC_LIB): $(BUILD)/sexpp.o | $(LIBDIR)
 	$(AR) -rcs $@ $^
 
-$(BUILD)/test: source/test.c $(LIBDIR)/sexpp.a | $(BUILD)
+$(BUILD)/test: source/test.c $(STATIC_LIB) | $(BUILD)
 	$(CC) -o $@ $(CFLAGS) $^ $(LDFLAGS)
+
+clean:
+	rm -rf $(BUILD) $(LIBDIR)
