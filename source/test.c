@@ -42,28 +42,85 @@ char *read_whole (FILE *in, size_t *out_sz)
     return buf;
 }
 
+void sexpr_print(const sexpr_t *s)
+{
+    if (!s || s->kind == SEXPR_NIL) {
+        printf("nil");
+        return;
+    }
+
+    switch (s->kind) {
+    case SEXPR_INTEGER:
+        printf("%d", s->integer);
+        break;
+
+    case SEXPR_SYMBOL:
+        printf("%s", s->symbol ? s->symbol : "nil");
+        break;
+
+    case SEXPR_PAIR: {
+        printf("(");
+        const sexpr_t *curr = s;
+        while (curr && curr->kind == SEXPR_PAIR) {
+            sexpr_print(curr->pair.head);
+
+            const sexpr_t *next = curr->pair.tail;
+            if (!next || next->kind == SEXPR_NIL) {
+                break;
+            } else if (next->kind == SEXPR_PAIR) {
+                printf(" ");
+                curr = next;
+            } else {
+                printf(" . ");
+                sexpr_print(next);
+                break;
+            }
+        }
+        printf(")");
+        break;
+    }
+
+    default:
+        printf("?");
+        break;
+    }
+}
+
 int
 main (int argc, char *argv[])
 {
     FILE *in = stdin;
+    char *src;
+    size_t src_sz;
+
+    sexpr_err_t e;
+    sexpr_t *expr;
+
     if (argc > 1)
         in = fopen (argv[1], "rb");
 
-    size_t src_sz;
-    char *src = read_whole (in, &src_sz);
+    src = read_whole (in, &src_sz);
     if (!src)
     {
         fprintf (stderr, "fuck you\n");
         return 1;
     }
 
-    sexpr_err_t e;
-    if (!sexpr_deserialize (src, &e))
+    expr = sexpr_deserialize (src, &e);
+
+    free (src);
+
+    if (!expr)
     {
         fprintf (stderr, "dupa: %d; %lu\n", e.code, e.offset);
     }
-
-    free (src);
+    else
+    {
+        sexpr_print (expr);
+        printf ("\n");
+        fflush (stdout);
+        sexpr_release (expr);
+    }
 
     if (argc > 1)
         fclose (in);

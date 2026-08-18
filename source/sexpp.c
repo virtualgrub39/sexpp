@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <assert.h>
 
 /* Trivial API */
 
@@ -162,19 +163,21 @@ struct token
     int kind;
 
     const char *ptr;
+    size_t offset;
     size_t length;
 
     struct token *next;
 };
 
 static struct token *
-token_new (int kind, const char *ptr, size_t length)
+token_new (int kind, const char *ptr, size_t offset, size_t length)
 {
     struct token *t = malloc (sizeof *t);
     if (!t) return NULL;
 
     t->kind = kind;
     t->ptr = ptr;
+    t->offset = offset;
     t->length = length;
     t->next = NULL;
 
@@ -251,18 +254,18 @@ lex_next (struct lexer *L)
 {
     skip_ws (L);
     if (reached_end (L))
-        return token_new (TOKEN_EOF, token_start (L), 0);
+        return token_new (TOKEN_EOF, token_start (L), L->idx, 0);
 
     struct token *t;
 
     switch (current_char (L))
     {
     case '(':
-        t = token_new (TOKEN_LPAREN, token_start (L), 1);
+        t = token_new (TOKEN_LPAREN, token_start (L), L->idx, 1);
         bump (L);
         return t;
     case ')':
-        t = token_new (TOKEN_RPAREN, token_start (L), 1);
+        t = token_new (TOKEN_RPAREN, token_start (L), L->idx, 1);
         bump (L);
         return t;
     }
@@ -276,7 +279,7 @@ lex_next (struct lexer *L)
             offset += 1;
         }
 
-        t = token_new (TOKEN_INTEGER, token_start (L), offset - L->idx);
+        t = token_new (TOKEN_INTEGER, token_start (L), L->idx, offset - L->idx);
 
         L->idx = offset;
 
@@ -292,7 +295,7 @@ lex_next (struct lexer *L)
             offset += 1;
         }
 
-        t = token_new (TOKEN_SYMBOL, token_start (L), offset - L->idx);
+        t = token_new (TOKEN_SYMBOL, token_start (L), L->idx, offset - L->idx);
 
         L->idx = offset;
 
@@ -341,31 +344,196 @@ lex (const char *src, size_t n, sexpr_err_t *out_err)
     return head;
 }
 
+static struct token *
+next (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *next_tok;
+    if (!head || !*head)
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNEXPECTED_EOF;
+            out_err->offset = 0;
+        }
+        
+        return NULL;
+    }
+
+    next_tok = *head;
+    *head = (*head)->next;
+
+    return next_tok;
+}
+
+static struct token *
+peek (struct token **head, sexpr_err_t *out_err)
+{
+    if (!head || !*head)
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNEXPECTED_EOF;
+            out_err->offset = 0;
+        }
+        
+        return NULL;
+    }
+
+    return *head;
+}
+
+static struct token *
+expect (struct token **head, int kind, sexpr_err_t *out_err)
+{
+    struct token *next_tok = next (head, out_err);
+    if (!next_tok) return NULL; /* Safety check for NULL on EOF */
+
+    if (next_tok->kind != kind)
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNEXPECTED_TOKEN;
+            out_err->offset = next_tok->offset;
+        }
+
+        return NULL;
+    }
+
+    return next_tok;
+}
+
+static sexpr_t *parse_list_tail (struct token **head, sexpr_err_t *out_err);
+static sexpr_t *parse_sexpr (struct token **head, sexpr_err_t *out_err);
+
+static sexpr_t *
+parse_list (struct token **head, sexpr_err_t *out_err)
+{
+    if (!expect (head, TOKEN_LPAREN, out_err))
+        return NULL;
+
+    return parse_list_tail (head, out_err);
+}
+
+static sexpr_t *
+parse_list_tail (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *tok = peek (head, out_err);
+    if (!tok) return NULL;
+
+    if (tok->kind == TOKEN_RPAREN)
+    {
+        next (head, out_err); 
+        return NULL;
+    }
+
+    sexpr_t *head_expr = parse_sexpr (head, out_err);
+    if (!head_expr) return NULL;
+
+    sexpr_t *tail_expr = parse_list_tail (head, out_err);
+    if (!tail_expr && out_err && out_err->code != SEXPR_OK)
+    {
+        sexpr_release (head_expr);
+        return NULL;
+    }
+
+    return sexpr_pair_s (head_expr, tail_expr);
+}
+
 #include <stdio.h>
+
+static sexpr_t *
+parse_integer (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *int_tok = expect (head, TOKEN_INTEGER, out_err);
+    char *int_buf;
+    char *end_ptr;
+    int i;
+
+    if (!int_tok) return NULL;
+    
+    int_buf = calloc (int_tok->length + 1, sizeof *int_buf);
+    memcpy (int_buf, int_tok->ptr, int_tok->length);
+    i = (int)strtol (int_buf, &end_ptr, 10);
+    
+    if (*end_ptr != 0)
+    {
+        free (int_buf);
+        /* FIXME: unreachable, if tokenizer doesn't suck ass */
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_INVALID_INTEGER;
+            out_err->offset = int_tok->offset;
+        }
+        return NULL;
+    }
+
+    free (int_buf);
+    return sexpr_integer (i);
+}
+
+static sexpr_t *
+parse_symbol (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *sym_tok = expect (head, TOKEN_SYMBOL, out_err);
+    
+    if (!sym_tok) return NULL;
+
+    return sexpr_symbol_n(sym_tok->ptr, sym_tok->length);
+}
+
+static sexpr_t *
+parse_sexpr (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *next_tok = peek (head, out_err);
+    if (!next_tok) return NULL;
+
+    switch (next_tok->kind)
+    {
+    case TOKEN_INTEGER: return parse_integer (head, out_err);
+    case TOKEN_SYMBOL:  return parse_symbol (head, out_err);
+    case TOKEN_LPAREN:  return parse_list (head, out_err);
+    case TOKEN_EOF:
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNEXPECTED_EOF;
+            out_err->offset = next_tok->offset;
+        }
+        return NULL;
+    }
+    case TOKEN_RPAREN:
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNBALANCED_PAREN;
+            out_err->offset = next_tok->offset;
+        }
+        return NULL;
+    }
+    default:
+        return NULL;
+    }
+}
+
+/* public API again */
+
+sexpr_t *
+sexpr_deserialize_n (const char *s, size_t n, sexpr_err_t *out_err)
+{
+    struct token *tokens = lex (s, n, out_err);
+    struct token **head = &tokens;
+    if (!tokens) return NULL;
+
+    sexpr_t *root = parse_sexpr (head, out_err);
+
+    token_free (tokens);
+
+    return root;
+}
 
 sexpr_t *
 sexpr_deserialize (const char *s, sexpr_err_t *out_err)
 {
-    struct token *tokens = lex (s, 0, out_err);
-    struct token *t = tokens;
-    
-    if (!tokens) return NULL;
-
-    while (t)
-    {
-        switch (t->kind)
-        {
-        case TOKEN_EOF: printf ("[EOF]\n"); break;
-        case TOKEN_INTEGER: printf ("[INT %.*s]\n", (int)t->length, t->ptr); break;
-        case TOKEN_LPAREN: printf ("[LPAREN]\n"); break;
-        case TOKEN_RPAREN: printf ("[RPAREN]\n"); break;
-        case TOKEN_SYMBOL: printf ("[SYM %.*s]\n", (int)t->length, t->ptr); break;
-        }
-
-        t = t->next;
-    }
-
-    token_free (tokens);
-
-    return (void*)696969; /* FIXME obviously... */
+    return sexpr_deserialize_n(s, 0, out_err);
 }
+
