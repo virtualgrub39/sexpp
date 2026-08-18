@@ -60,7 +60,7 @@ main (int argc, char *argv[])
     char *src;
     size_t src_sz;
 
-    sexpr_err_t e;
+    sexpr_err_t e = { 0 };
     sexpr_t *expr;
 
     if (argc > 1)

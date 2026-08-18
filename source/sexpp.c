@@ -441,7 +441,7 @@ parse_list_tail (struct token **head, sexpr_err_t *out_err)
     if (!head_expr) return NULL;
 
     tail_expr = parse_list_tail (head, out_err);
-    if (!tail_expr && out_err && out_err->code != SEXPR_OK)
+    if (!tail_expr)
     {
         sexpr_release (head_expr);
         return NULL;
@@ -526,13 +526,12 @@ parse_sexpr (struct token **head, sexpr_err_t *out_err)
     }
 }
 
-/* public API again */
-
 sexpr_t *
 sexpr_deserialize_n (const char *s, size_t n, sexpr_err_t *out_err)
 {
     struct token *tokens = lex (s, n, out_err);
-    struct token **head = &tokens;
+    struct token *cursor = tokens;
+    struct token **head = &cursor;
     sexpr_t *root;
 
     if (!tokens) return NULL;
@@ -613,7 +612,7 @@ buf_append_sexpr (struct buffer *buf, const sexpr_t *s)
         buf_append_str(buf, "(");
         while (curr && curr->kind == SEXPR_PAIR) {
             const sexpr_t *next = curr->as.pair.tail;
-            
+
             buf_append_sexpr(buf, curr->as.pair.head);
 
             if (!next || next->kind == SEXPR_NIL) {
