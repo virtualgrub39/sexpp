@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <assert.h>
+#include <stdio.h>
 
 /* Trivial API */
 
@@ -26,7 +27,7 @@ sexpr_t *sexpr_integer (int i)
     sexpr_t *s = sexpr (SEXPR_INTEGER);
     if (!s) return NULL;
 
-    s->integer = i;
+    s->as.integer = i;
 
     return s;
 }
@@ -34,10 +35,11 @@ sexpr_t *sexpr_integer (int i)
 sexpr_t *sexpr_symbol (const char *sym)
 {
     char *sym_clone;
+    sexpr_t *s;
 
     if (!sym) return NULL;
 
-    sexpr_t *s = sexpr (SEXPR_SYMBOL);
+    s = sexpr (SEXPR_SYMBOL);
     if (!s) return NULL;
 
     sym_clone = malloc ((strlen (sym) + 1) * sizeof *sym);
@@ -49,7 +51,7 @@ sexpr_t *sexpr_symbol (const char *sym)
 
     strcpy (sym_clone, sym);
 
-    s->symbol = sym_clone;
+    s->as.symbol = sym_clone;
 
     return s;
 }
@@ -57,10 +59,11 @@ sexpr_t *sexpr_symbol (const char *sym)
 sexpr_t *sexpr_symbol_n (const char *sym, size_t n)
 {
     char *sym_clone;
+    sexpr_t *s;
 
     if (!sym || n == 0) return NULL;
 
-    sexpr_t *s = sexpr (SEXPR_SYMBOL);
+    s = sexpr (SEXPR_SYMBOL);
     if (!s) return NULL;
 
     sym_clone = malloc ((n+1) * sizeof *sym);
@@ -73,7 +76,7 @@ sexpr_t *sexpr_symbol_n (const char *sym, size_t n)
     memcpy (sym_clone, sym, n);
     sym_clone[n] = 0;
 
-    s->symbol = sym_clone;
+    s->as.symbol = sym_clone;
 
     return s;
 }
@@ -83,8 +86,8 @@ sexpr_t *sexpr_pair (sexpr_t *head, sexpr_t *tail)
     sexpr_t *s = sexpr (SEXPR_PAIR);
     if (!s) return NULL;
 
-    s->pair.head = sexpr_retain (head);
-    s->pair.tail = sexpr_retain (tail);
+    s->as.pair.head = sexpr_retain (head);
+    s->as.pair.tail = sexpr_retain (tail);
 
     return s;
 }
@@ -99,8 +102,8 @@ sexpr_t *sexpr_pair_s (sexpr_t *head, sexpr_t *tail)
         return NULL;
     }
 
-    s->pair.head = head;
-    s->pair.tail = tail;
+    s->as.pair.head = head;
+    s->as.pair.tail = tail;
 
     return s;
 }
@@ -130,16 +133,16 @@ void sexpr_release (sexpr_t *s)
         }
         else if (p->kind == SEXPR_SYMBOL)
         {
-            free (p->symbol);
+            free (p->as.symbol);
             free (p);
             break;
         }
         else if (p->kind == SEXPR_PAIR)
         {
-            sexpr_t *next = p->pair.tail;
+            sexpr_t *next = p->as.pair.tail;
 
             /* assumes shallow head */
-            sexpr_release (p->pair.head);
+            sexpr_release (p->as.pair.head);
             free (p);
 
             p = next;
@@ -155,7 +158,7 @@ enum
     TOKEN_LPAREN,
     TOKEN_RPAREN,
     TOKEN_SYMBOL,
-    TOKEN_INTEGER,
+    TOKEN_INTEGER
 };
 
 struct token
@@ -252,11 +255,11 @@ static void skip_ws (struct lexer *L)
 static struct token *
 lex_next (struct lexer *L)
 {
+    struct token *t;
+    
     skip_ws (L);
     if (reached_end (L))
         return token_new (TOKEN_EOF, token_start (L), L->idx, 0);
-
-    struct token *t;
 
     switch (current_char (L))
     {
@@ -313,9 +316,14 @@ lex_next (struct lexer *L)
 static struct token *
 lex (const char *src, size_t n, sexpr_err_t *out_err)
 {
-    struct lexer L = { src, 0, n ? n : strlen(src), out_err };
+    struct lexer L;
     struct token *head = NULL;
     struct token *tail = NULL;
+
+    L.src = src;
+    L.idx = 0;
+    L.len = n ? n : strlen (src);
+    L.e = out_err;
 
     while (1)
     {
@@ -417,7 +425,10 @@ parse_list (struct token **head, sexpr_err_t *out_err)
 static sexpr_t *
 parse_list_tail (struct token **head, sexpr_err_t *out_err)
 {
+    sexpr_t *head_expr;
+    sexpr_t *tail_expr;
     struct token *tok = peek (head, out_err);
+
     if (!tok) return NULL;
 
     if (tok->kind == TOKEN_RPAREN)
@@ -426,10 +437,10 @@ parse_list_tail (struct token **head, sexpr_err_t *out_err)
         return NULL;
     }
 
-    sexpr_t *head_expr = parse_sexpr (head, out_err);
+    head_expr = parse_sexpr (head, out_err);
     if (!head_expr) return NULL;
 
-    sexpr_t *tail_expr = parse_list_tail (head, out_err);
+    tail_expr = parse_list_tail (head, out_err);
     if (!tail_expr && out_err && out_err->code != SEXPR_OK)
     {
         sexpr_release (head_expr);
@@ -522,9 +533,11 @@ sexpr_deserialize_n (const char *s, size_t n, sexpr_err_t *out_err)
 {
     struct token *tokens = lex (s, n, out_err);
     struct token **head = &tokens;
+    sexpr_t *root;
+
     if (!tokens) return NULL;
 
-    sexpr_t *root = parse_sexpr (head, out_err);
+    root = parse_sexpr (head, out_err);
 
     token_free (tokens);
 
@@ -537,3 +550,102 @@ sexpr_deserialize (const char *s, sexpr_err_t *out_err)
     return sexpr_deserialize_n(s, 0, out_err);
 }
 
+struct buffer
+{
+    char *data;
+    size_t cap;
+    size_t len;
+};
+
+static void
+buf_append_n (struct buffer *buf, const char *str, size_t len)
+{
+    if (buf->len + len + 1 > buf->cap)
+    {
+        buf->cap = buf->cap == 0 ? 64 : buf->cap * 2;
+        while (buf->cap < buf->len + len + 1)
+            buf->cap *= 2;
+        buf->data = realloc (buf->data, buf->cap);
+    }
+
+    memcpy (buf->data + buf->len, str, len);
+    buf->len += len;
+    buf->data[buf->len] = 0;
+}
+
+static void
+buf_append_str (struct buffer *buf, const char *str)
+{
+    buf_append_n (buf, str, strlen (str));
+}
+
+static void 
+buf_append_int (struct buffer *buf, int i)
+{
+    char tmp[32];
+    int n = sprintf(tmp, "%d", i); /* FIXME: no length checking. No way for it to exceed 32 characters, but stil. */
+    if (n > 0) {
+        buf_append_n(buf, tmp, (size_t)n);
+    }
+}
+
+static void
+buf_append_sexpr (struct buffer *buf, const sexpr_t *s)
+{
+    if (!s || s->kind == SEXPR_NIL)
+    {
+        buf_append_str(buf, "nil");
+        return;
+    }
+
+    switch (s->kind)
+    {
+    case SEXPR_INTEGER:
+        buf_append_int (buf, s->as.integer);
+        break;
+    case SEXPR_SYMBOL:
+        buf_append_str (buf, s->as.symbol ? s->as.symbol : "nil");
+        break;
+    case SEXPR_PAIR:
+    {
+        const sexpr_t *curr = s;
+
+        buf_append_str(buf, "(");
+        while (curr && curr->kind == SEXPR_PAIR) {
+            const sexpr_t *next = curr->as.pair.tail;
+            
+            buf_append_sexpr(buf, curr->as.pair.head);
+
+            if (!next || next->kind == SEXPR_NIL) {
+                break;
+            } else if (next->kind == SEXPR_PAIR) {
+                buf_append_str(buf, " ");
+                curr = next;
+            } else {
+                buf_append_str(buf, " . ");
+                buf_append_sexpr(buf, next);
+                break;
+            }
+        }
+        buf_append_str(buf, ")");
+        break;
+    }
+    default:
+        buf_append_str(buf, "?");
+        break;
+    }
+}
+
+char *
+sexpr_serialize (sexpr_t *s, size_t *out_sz)
+{
+    struct buffer buf = { 0 };
+    buf_append_sexpr(&buf, s);
+    if (out_sz)
+        *out_sz = buf.len;
+    return buf.data;
+}
+
+/* TODO:
+ * - check reallocs for success
+ */

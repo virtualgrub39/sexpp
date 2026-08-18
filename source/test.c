@@ -5,11 +5,13 @@
 
 char *read_whole (FILE *in, size_t *out_sz)
 {
-    if (!in) return NULL;
-
     size_t cap = 128;
     size_t sz = 0;
-    char *buf = malloc (cap * sizeof *buf);
+    char *buf;
+
+    if (!in) return NULL;
+
+    buf = malloc (cap * sizeof *buf);
 
     while (1)
     {
@@ -44,45 +46,10 @@ char *read_whole (FILE *in, size_t *out_sz)
 
 void sexpr_print(const sexpr_t *s)
 {
-    if (!s || s->kind == SEXPR_NIL) {
-        printf("nil");
-        return;
-    }
-
-    switch (s->kind) {
-    case SEXPR_INTEGER:
-        printf("%d", s->integer);
-        break;
-
-    case SEXPR_SYMBOL:
-        printf("%s", s->symbol ? s->symbol : "nil");
-        break;
-
-    case SEXPR_PAIR: {
-        printf("(");
-        const sexpr_t *curr = s;
-        while (curr && curr->kind == SEXPR_PAIR) {
-            sexpr_print(curr->pair.head);
-
-            const sexpr_t *next = curr->pair.tail;
-            if (!next || next->kind == SEXPR_NIL) {
-                break;
-            } else if (next->kind == SEXPR_PAIR) {
-                printf(" ");
-                curr = next;
-            } else {
-                printf(" . ");
-                sexpr_print(next);
-                break;
-            }
-        }
-        printf(")");
-        break;
-    }
-
-    default:
-        printf("?");
-        break;
+    char *str = sexpr_serialize((sexpr_t *)s, NULL);
+    if (str) {
+        fputs(str, stdout);
+        free(str);
     }
 }
 

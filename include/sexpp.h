@@ -10,7 +10,7 @@ typedef enum
     SEXPR_NIL, /* non-instantiable: NULL for NIL */
     SEXPR_PAIR,
     SEXPR_INTEGER,
-    SEXPR_SYMBOL,
+    SEXPR_SYMBOL
 } sexpr_kind;
 
 typedef struct sexpr
@@ -23,7 +23,7 @@ typedef struct sexpr
         struct { struct sexpr *head, *tail; } pair;
         int integer;
         char *symbol;
-    };
+    } as;
 } sexpr_t;
 
 /* ---- LIFETIME ---- */
@@ -56,7 +56,7 @@ typedef enum
     SEXPR_ERR_INVALID_CHAR,
     SEXPR_ERR_UNEXPECTED_EOF,
     SEXPR_ERR_UNEXPECTED_TOKEN,
-    SEXPR_ERR_INVALID_INTEGER,
+    SEXPR_ERR_INVALID_INTEGER
 } sexpr_err_code;
 
 typedef struct
@@ -70,6 +70,6 @@ typedef struct
 sexpr_t *sexpr_deserialize (const char *s, sexpr_err_t *out_err);
 sexpr_t *sexpr_deserialize_n (const char *s, size_t n, sexpr_err_t *out_err);
 
-char *sexpr_serialize (sexpr_t *s, sexpr_err_t *out_err); /* heap-allocated */
+char *sexpr_serialize (sexpr_t *s, size_t *out_sz); /* heap-allocated */
 
 #endif

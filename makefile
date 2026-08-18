@@ -4,7 +4,7 @@ BUILD = build
 
 CFLAGS += -Wall -Wextra
 CFLAGS += -Iinclude
-CFLAGS += -std=c89
+CFLAGS += -ansi -pedantic-errors
 CFLAGS += -ggdb
 # CFLAGS += -O2
 
