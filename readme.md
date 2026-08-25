@@ -51,6 +51,8 @@ sexpr_t *sexpr (sexpr_kind kind); /* uninitialized atom */
 sexpr_t *sexpr_integer (int i);
 sexpr_t *sexpr_symbol (const char *sym);
 sexpr_t *sexpr_symbol_n (const char *sym, size_t n); /* sized */
+sexpr_t *sexpr_string (const char *str);
+sexpr_t *sexpr_string_n (const char *str, size_t n); /* sized */
 sexpr_t *sexpr_pair (sexpr_t *head, sexpr_t *tail);
 sexpr_t *sexpr_pair_s (sexpr_t *head, sexpr_t *tail); /* stealing (doesn't increment RC) */
 

@@ -81,6 +81,24 @@ sexpr_t *sexpr_symbol_n (const char *sym, size_t n)
     return s;
 }
 
+/* kindof silly tbh */
+
+sexpr_t *sexpr_string (const char *str)
+{
+    sexpr_t *s = sexpr_symbol (str);
+    if (!s) return NULL;
+    s->kind = SEXPR_STRING;
+    return s;
+}
+
+sexpr_t *sexpr_string_n (const char *str, size_t n)
+{
+    sexpr_t *s = sexpr_symbol_n (str, n);
+    if (!s) return NULL;
+    s->kind = SEXPR_STRING;
+    return s;
+}
+
 sexpr_t *sexpr_pair (sexpr_t *head, sexpr_t *tail)
 {
     sexpr_t *s = sexpr (SEXPR_PAIR);
@@ -158,7 +176,9 @@ enum
     TOKEN_LPAREN,
     TOKEN_RPAREN,
     TOKEN_SYMBOL,
-    TOKEN_INTEGER
+    TOKEN_INTEGER,
+    TOKEN_CHARACTER,
+    TOKEN_STRING
 };
 
 struct token
@@ -243,7 +263,7 @@ static int is_digit (char c)
 
 static int is_symbol_char (char c)
 {
-    return c && (is_alpha (c) || is_digit (c) || strchr ("+-!_:/~%.<>=*", (unsigned char) c) != NULL);
+    return c && (is_alpha (c) || is_digit (c) || strchr ("+-!_:/~%.<>=*#&", (unsigned char) c) != NULL);
 }
 
 static void skip_ws (struct lexer *L)
@@ -256,12 +276,15 @@ static struct token *
 lex_next (struct lexer *L)
 {
     struct token *t;
+    char current;
     
     skip_ws (L);
     if (reached_end (L))
         return token_new (TOKEN_EOF, token_start (L), L->idx, 0);
 
-    switch (current_char (L))
+    current = current_char (L);
+
+    switch (current)
     {
     case '(':
         t = token_new (TOKEN_LPAREN, token_start (L), L->idx, 1);
@@ -273,7 +296,7 @@ lex_next (struct lexer *L)
         return t;
     }
 
-    if (is_digit (current_char (L)))
+    if (is_digit (current))
     {
         size_t offset = L->idx + 1;
 
@@ -289,7 +312,7 @@ lex_next (struct lexer *L)
         return t;
     }
 
-    if (is_symbol_char (current_char (L)))
+    if (is_symbol_char (current))
     {
         size_t offset = L->idx + 1;
 
@@ -305,9 +328,61 @@ lex_next (struct lexer *L)
         return t;
     }
 
+    if (current == '\'') /* FIXME: seems like a bug-prone implementation, idk. */
+    {
+        size_t offset = L->idx + 1;
+        if (L->len - offset > 1 && L->src[offset] == '\\') offset += 1; /* escape */
+        if (L->len - offset > 1) offset += 1; /* character */
+        if (L->len - offset < 1 ||  L->src[offset] != '\'')
+        {
+            if (L->e)
+            {
+                L->e->code = SEXPR_ERR_INVALID_CHARACTER_SYNTAX;
+                L->e->offset = L->idx;
+            }
+            return NULL;
+        }
+        offset += 1; /* end-quote */
+
+        t = token_new (TOKEN_CHARACTER, token_start (L), L->idx, offset - L->idx);
+
+        L->idx = offset;
+
+        return t;
+    }
+
+    if (current == '"')
+    {
+        size_t offset = L->idx + 1;
+
+        while (offset < L->len && L->src[offset] != '"') /* FIXME: escaping */
+        {
+            if (L->len - offset > 1 && L->src[offset] == '\\')
+                offset += 1;
+            offset += 1;
+        }
+
+        if (L->src[offset] != '"')
+        {
+            if (L->e)
+            {
+                L->e->code = SEXPR_ERR_QUOTE_NOT_CLOSED;
+                L->e->offset = L->idx;
+            }
+            return NULL;
+        }
+        offset += 1;
+
+        t = token_new (TOKEN_STRING, token_start (L), L->idx, offset - L->idx);
+
+        L->idx = offset;
+
+        return t;
+    }
+
     if (L->e)
     {
-        L->e->code = SEXPR_ERR_INVALID_CHAR;
+        L->e->code = SEXPR_ERR_UNRECOGNISED_CHAR;
         L->e->offset = L->idx;
     }
     return NULL;
@@ -440,6 +515,13 @@ parse_list_tail (struct token **head, sexpr_err_t *out_err)
     head_expr = parse_sexpr (head, out_err);
     if (!head_expr) return NULL;
 
+    tok = peek (head, out_err);
+    if (tok && tok->kind == TOKEN_RPAREN) /* check if there is no tail expression */
+    {
+        next (head, out_err);
+        return sexpr_pair_s (head_expr, NULL);
+    }
+
     tail_expr = parse_list_tail (head, out_err);
     if (!tail_expr)
     {
@@ -461,7 +543,7 @@ parse_integer (struct token **head, sexpr_err_t *out_err)
     int i;
 
     if (!int_tok) return NULL;
-    
+
     int_buf = calloc (int_tok->length + 1, sizeof *int_buf);
     memcpy (int_buf, int_tok->ptr, int_tok->length);
     i = (int)strtol (int_buf, &end_ptr, 10);
@@ -486,10 +568,49 @@ static sexpr_t *
 parse_symbol (struct token **head, sexpr_err_t *out_err)
 {
     struct token *sym_tok = expect (head, TOKEN_SYMBOL, out_err);
-    
+
     if (!sym_tok) return NULL;
 
     return sexpr_symbol_n(sym_tok->ptr, sym_tok->length);
+}
+
+static sexpr_t *
+parse_string (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *str_tok = expect (head, TOKEN_STRING, out_err);
+    
+    if (!str_tok) return NULL;
+
+    return sexpr_string_n(str_tok->ptr + 1, str_tok->length - 2);
+}
+
+static sexpr_t *
+parse_character (struct token **head, sexpr_err_t *out_err)
+{
+    struct token *char_tok = expect (head, TOKEN_CHARACTER, out_err);
+    unsigned char c;
+    
+    if (!char_tok) return NULL;
+
+    if (*(char_tok->ptr+1) == '\\') /* escape code */
+    {
+        switch (*(char_tok->ptr+2))
+        {
+        case 'r': c = '\r'; break;
+        case 'n': c = '\n'; break;
+        case 't': c = '\t'; break;
+        case '0': c = '\0'; break;
+        case 'b': c = '\b'; break;
+        default: assert (0 && "Unsupported escape sequence!"); /* FIXME */
+        /* TODO: more? */
+        }
+    }
+    else
+    {
+        c = *(char_tok->ptr+1);
+    }
+
+    return sexpr_integer (c);
 }
 
 static sexpr_t *
@@ -500,6 +621,8 @@ parse_sexpr (struct token **head, sexpr_err_t *out_err)
 
     switch (next_tok->kind)
     {
+    case TOKEN_STRING: return parse_string (head, out_err);
+    case TOKEN_CHARACTER: return parse_character (head, out_err);
     case TOKEN_INTEGER: return parse_integer (head, out_err);
     case TOKEN_SYMBOL:  return parse_symbol (head, out_err);
     case TOKEN_LPAREN:  return parse_list (head, out_err);
@@ -629,6 +752,11 @@ buf_append_sexpr (struct buffer *buf, const sexpr_t *s)
         buf_append_str(buf, ")");
         break;
     }
+    case SEXPR_STRING:
+        buf_append_str (buf, "\"");
+        buf_append_str (buf, s->as.string ? s->as.string : "nil");
+        buf_append_str (buf, "\"");
+        break;
     default:
         buf_append_str(buf, "?");
         break;
