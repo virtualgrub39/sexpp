@@ -48,7 +48,7 @@ Memory management is done through reference-counting. Fancy features like loop d
 /* For creating an Atom */
 
 sexpr_t *sexpr (sexpr_kind kind); /* uninitialized atom */
-sexpr_t *sexpr_integer (int i);
+sexpr_t *sexpr_number (float n);
 sexpr_t *sexpr_symbol (const char *sym);
 sexpr_t *sexpr_symbol_n (const char *sym, size_t n); /* sized */
 sexpr_t *sexpr_string (const char *str);
