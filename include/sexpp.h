@@ -9,7 +9,7 @@ typedef enum
 {
     SEXPR_NIL, /* non-instantiable: NULL for NIL */
     SEXPR_PAIR,
-    SEXPR_INTEGER,
+    SEXPR_NUMBER,
     SEXPR_STRING,
     SEXPR_SYMBOL
 } sexpr_kind;
@@ -22,7 +22,7 @@ typedef struct sexpr
     union
     {
         struct { struct sexpr *head, *tail; } pair;
-        int integer;
+        float number;
         char *symbol;
         char *string;
     } as;
@@ -31,7 +31,7 @@ typedef struct sexpr
 /* ---- LIFETIME ---- */
 
 sexpr_t *sexpr (sexpr_kind kind);
-sexpr_t *sexpr_integer (int i);
+sexpr_t *sexpr_number (float n);
 sexpr_t *sexpr_symbol (const char *sym);
 sexpr_t *sexpr_symbol_n (const char *sym, size_t n); /* sized */
 sexpr_t *sexpr_string (const char *str);
@@ -56,13 +56,15 @@ void sexpr_release (sexpr_t *s);
 typedef enum
 {
     SEXPR_OK = 0,
+    SEXPR_ERR_ALLOC_FAILED,
     SEXPR_ERR_UNBALANCED_PAREN,
     SEXPR_ERR_UNRECOGNISED_CHAR,
     SEXPR_ERR_UNEXPECTED_EOF,
     SEXPR_ERR_UNEXPECTED_TOKEN,
     SEXPR_ERR_INVALID_INTEGER,
     SEXPR_ERR_INVALID_CHARACTER_SYNTAX,
-    SEXPR_ERR_QUOTE_NOT_CLOSED
+    SEXPR_ERR_QUOTE_NOT_CLOSED,
+    SEXPR_ERR_INVALID_ESCAPE_CODE
 } sexpr_err_code;
 
 typedef struct

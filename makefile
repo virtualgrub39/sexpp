@@ -8,8 +8,8 @@ CFLAGS += -ansi
 CFLAGS += -Iinclude
 CFLAGS += -fPIC
 
-# CFLAGS += -ggdb
-CFLAGS += -O2
+CFLAGS += -ggdb
+# CFLAGS += -O2
 
 STATIC_LIB = $(LIBDIR)/libsexpp.a
 SHARED_LIB = $(LIBDIR)/libsexpp.so

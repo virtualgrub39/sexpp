@@ -22,7 +22,7 @@ Alternatively, You can rawdog everything by adding:
 SEXPP_DIR = path/to/sexpp
 SEXPP_LIB = $(SEXPP_DIR)/lib/libsexpp.a
 
-CFLAGS += $(SEXPP_DIR)/include
+CFLAGS += -I$(SEXPP_DIR)/include
 
 $(SEXPP_LIB):
     $(MAKE) -C $(SEXPP_DIR)

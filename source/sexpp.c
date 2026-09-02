@@ -22,12 +22,12 @@ sexpr_t *sexpr (sexpr_kind kind)
     return s;
 }
 
-sexpr_t *sexpr_integer (int i)
+sexpr_t *sexpr_number (float n)
 {
-    sexpr_t *s = sexpr (SEXPR_INTEGER);
+    sexpr_t *s = sexpr (SEXPR_NUMBER);
     if (!s) return NULL;
 
-    s->as.integer = i;
+    s->as.number = n;
 
     return s;
 }
@@ -144,7 +144,7 @@ void sexpr_release (sexpr_t *s)
         if ((p->rc -= 1) > 0)
             break;
 
-        if (p->kind == SEXPR_INTEGER)
+        if (p->kind == SEXPR_NUMBER)
         {
             free (p);
             break;
@@ -176,7 +176,7 @@ enum
     TOKEN_LPAREN,
     TOKEN_RPAREN,
     TOKEN_SYMBOL,
-    TOKEN_INTEGER,
+    TOKEN_NUMBER,
     TOKEN_CHARACTER,
     TOKEN_STRING
 };
@@ -273,6 +273,51 @@ static void skip_ws (struct lexer *L)
 }
 
 static struct token *
+lex_number (struct lexer *L)
+{
+    size_t start = L->idx;
+
+    assert (!reached_end (L));
+
+    if (current_char (L) == '-' || current_char (L) == '+')
+    {
+        bump(L);
+    }
+
+    assert (!reached_end (L));
+
+    while (!reached_end (L) && is_digit (current_char (L)))
+    {
+        bump(L);
+    }
+
+    if (!reached_end (L) && current_char (L) == '.')
+    {
+        bump (L);
+
+        while (!reached_end (L) && is_digit (current_char (L)))
+        {
+            bump (L);
+        }
+    }
+
+    if (!reached_end (L) && (current_char (L) == 'e' || current_char (L) == 'E'))
+    {
+        bump (L);
+        if (!reached_end (L) && (current_char (L) == '+' || current_char (L) == '-'))
+        {
+            bump (L);
+        }
+        while (!reached_end (L) && is_digit (current_char (L)))
+        {
+            bump (L);
+        }
+    }
+
+    return token_new (TOKEN_NUMBER, L->src + start, start, L->idx - start);
+}
+
+static struct token *
 lex_next (struct lexer *L)
 {
     struct token *t;
@@ -296,22 +341,21 @@ lex_next (struct lexer *L)
         return t;
     }
 
-    if (is_digit (current))
+    if (current == '-' || current == '+')
     {
-        size_t offset = L->idx + 1;
-
-        while (offset < L->len && is_digit(L->src[offset]))
+        if (L->idx+1 >= L->len || !is_digit (L->src[L->idx+1]))
         {
-            offset += 1;
+            /* fall through to `is_symbol_char` lmao */
         }
-
-        t = token_new (TOKEN_INTEGER, token_start (L), L->idx, offset - L->idx);
-
-        L->idx = offset;
-
-        return t;
+        else
+        {
+            return lex_number (L);
+        }
     }
-
+    if (is_digit(current) || current == '.')
+    {
+        return lex_number (L);
+    }
     if (is_symbol_char (current))
     {
         size_t offset = L->idx + 1;
@@ -362,7 +406,7 @@ lex_next (struct lexer *L)
             offset += 1;
         }
 
-        if (L->src[offset] != '"')
+        if (offset >= L->len || L->src[offset] != '"')
         {
             if (L->e)
             {
@@ -469,7 +513,16 @@ static struct token *
 expect (struct token **head, int kind, sexpr_err_t *out_err)
 {
     struct token *next_tok = next (head, out_err);
-    if (!next_tok) return NULL;
+    if (!next_tok)
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_UNEXPECTED_EOF;
+            out_err->offset = -1;
+        }
+
+        return NULL;
+    }
 
     if (next_tok->kind != kind)
     {
@@ -535,33 +588,33 @@ parse_list_tail (struct token **head, sexpr_err_t *out_err)
 #include <stdio.h>
 
 static sexpr_t *
-parse_integer (struct token **head, sexpr_err_t *out_err)
+parse_number (struct token **head, sexpr_err_t *out_err)
 {
-    struct token *int_tok = expect (head, TOKEN_INTEGER, out_err);
-    char *int_buf;
+    struct token *num_tok = expect (head, TOKEN_NUMBER, out_err);
+    char *num_buf;
     char *end_ptr;
-    int i;
+    float i;
 
-    if (!int_tok) return NULL;
+    if (!num_tok) return NULL;
 
-    int_buf = calloc (int_tok->length + 1, sizeof *int_buf);
-    memcpy (int_buf, int_tok->ptr, int_tok->length);
-    i = (int)strtol (int_buf, &end_ptr, 10);
+    num_buf = calloc (num_tok->length + 1, sizeof *num_buf);
+    memcpy (num_buf, num_tok->ptr, num_tok->length);
+    i = (float)strtod (num_buf, &end_ptr);
     
     if (*end_ptr != 0)
     {
-        free (int_buf);
+        free (num_buf);
         /* FIXME: unreachable, if tokenizer doesn't suck ass */
         if (out_err)
         {
             out_err->code = SEXPR_ERR_INVALID_INTEGER;
-            out_err->offset = int_tok->offset;
+            out_err->offset = num_tok->offset;
         }
         return NULL;
     }
 
-    free (int_buf);
-    return sexpr_integer (i);
+    free (num_buf);
+    return sexpr_number (i);
 }
 
 static sexpr_t *
@@ -574,18 +627,72 @@ parse_symbol (struct token **head, sexpr_err_t *out_err)
     return sexpr_symbol_n(sym_tok->ptr, sym_tok->length);
 }
 
+static char *
+str_escape_n (const char *str, size_t n)
+{
+    char *result = malloc (n * sizeof *result);
+    char *r = result;
+    size_t i;
+    const char *s = str;
+
+    if (!result)
+        return NULL;
+
+    for (i = 0; i < n; ++s, ++r)
+    {
+        if (*s == '\\')
+        {
+            switch (*(s+1))
+            {
+            case 'r': *r = '\r'; break;
+            case 'n': *r = '\n'; break;
+            case 't': *r = '\t'; break;
+            case '0': *r = '\0'; break;
+            case 'b': *r = '\b'; break;
+            case '\\': *r = '\\'; break;
+            case '\'': *r = '\''; break;
+            case '\"': *r = '\"'; break;
+            default: free (result); return NULL;
+            }
+            s += 1;
+        }
+        else
+        {
+            *r = *s;
+        }
+    }
+
+    return result;
+}
+
 static sexpr_t *
 parse_string (struct token **head, sexpr_err_t *out_err)
 {
     struct token *str_tok = expect (head, TOKEN_STRING, out_err);
-    
+    char *str;
+    sexpr_t *result;
+
     if (!str_tok) return NULL;
 
-    return sexpr_string_n(str_tok->ptr + 1, str_tok->length - 2);
+    str = str_escape_n (str_tok->ptr+1, str_tok->length - 2);
+    if (!str)
+    {
+        if (out_err)
+        {
+            out_err->code = SEXPR_ERR_INVALID_ESCAPE_CODE;
+            out_err->offset = str_tok->offset;
+        }
+        return NULL;
+    }
+
+    result =  sexpr_string (str); /* FIXME: stealing version */
+
+    free (str);
+    return result;
 }
 
 static sexpr_t *
-parse_character (struct token **head, sexpr_err_t *out_err)
+parse_character (struct token **head, sexpr_err_t *out_err) /* TODO: merge escape logic with `str_escape_n` */
 {
     struct token *char_tok = expect (head, TOKEN_CHARACTER, out_err);
     unsigned char c;
@@ -601,7 +708,16 @@ parse_character (struct token **head, sexpr_err_t *out_err)
         case 't': c = '\t'; break;
         case '0': c = '\0'; break;
         case 'b': c = '\b'; break;
-        default: assert (0 && "Unsupported escape sequence!"); /* FIXME */
+        case '\\': c = '\\'; break;
+        case '\'': c = '\''; break;
+        case '\"': c = '\"'; break;
+        default:
+            if (out_err)
+            {
+                out_err->code = SEXPR_ERR_INVALID_ESCAPE_CODE;
+                out_err->offset = char_tok->offset;
+            }
+            return NULL;
         /* TODO: more? */
         }
     }
@@ -610,7 +726,7 @@ parse_character (struct token **head, sexpr_err_t *out_err)
         c = *(char_tok->ptr+1);
     }
 
-    return sexpr_integer (c);
+    return sexpr_number (c);
 }
 
 static sexpr_t *
@@ -623,7 +739,7 @@ parse_sexpr (struct token **head, sexpr_err_t *out_err)
     {
     case TOKEN_STRING: return parse_string (head, out_err);
     case TOKEN_CHARACTER: return parse_character (head, out_err);
-    case TOKEN_INTEGER: return parse_integer (head, out_err);
+    case TOKEN_NUMBER: return parse_number (head, out_err);
     case TOKEN_SYMBOL:  return parse_symbol (head, out_err);
     case TOKEN_LPAREN:  return parse_list (head, out_err);
     case TOKEN_EOF:
@@ -702,10 +818,10 @@ buf_append_str (struct buffer *buf, const char *str)
 }
 
 static void 
-buf_append_int (struct buffer *buf, int i)
+buf_append_float (struct buffer *buf, float f)
 {
     char tmp[32];
-    int n = sprintf(tmp, "%d", i); /* FIXME: no length checking. No way for it to exceed 32 characters, but stil. */
+    int n = sprintf(tmp, "%g", f); /* FIXME: no length checking. No way for it to exceed 32 characters, but stil. */
     if (n > 0) {
         buf_append_n(buf, tmp, (size_t)n);
     }
@@ -722,8 +838,8 @@ buf_append_sexpr (struct buffer *buf, const sexpr_t *s)
 
     switch (s->kind)
     {
-    case SEXPR_INTEGER:
-        buf_append_int (buf, s->as.integer);
+    case SEXPR_NUMBER:
+        buf_append_float (buf, s->as.number);
         break;
     case SEXPR_SYMBOL:
         buf_append_str (buf, s->as.symbol ? s->as.symbol : "nil");
